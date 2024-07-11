@@ -1,0 +1,121 @@
+[gd_resource type="Shader" format=3 uid="uid://celph5oiqptio"]
+
+[resource]
+code = "shader_type spatial;
+render_mode unshaded;
+
+
+uniform sampler2D screen_tex : hint_screen_texture;
+uniform sampler2D depth_tex : hint_depth_texture;
+
+uniform sampler2D objects_texture_1;
+
+const float precis = 0.01;
+
+uniform int sphere_count = 1;
+uniform mat4[50] sphere_transforms;
+uniform float[50] sphere_radius;
+
+uniform vec3 sun_vector;
+
+
+float sdSphere(vec3 p, float s){
+	return length(p) - s;
+	}
+
+
+float smin( float a, float b, float k ){
+    k *= 1.0;
+    float res = exp2( -a/k ) + exp2( -b/k );
+    return -k*log2( res );
+}
+
+
+float map(vec3 p){
+	float dist = 1000.0;
+	for(int i =0; i < sphere_count; i++){
+		mat4 sp = sphere_transforms[i];
+		float sphereRadius = sphere_radius[i];
+		float d  = smin(dist, sdSphere(p - sp[3].xyz , sphereRadius), 1.4);
+		//float d  = min(dist, sdSphere(p - sp[3].xyz , sphereRadius));
+		
+		dist = d;
+	}
+	return dist;
+}
+	
+	
+vec3 calcNormal( in vec3 pos ){
+	
+    vec3 eps = vec3(precis,0.0,0.0);
+	
+	return normalize( vec3(
+           map(pos+eps.xyy) - map(pos-eps.xyy),
+           map(pos+eps.yxy) - map(pos-eps.yxy),
+           map(pos+eps.yyx) - map(pos-eps.yyx) ) );
+}
+
+
+vec4 boxmap(in sampler2D s, in vec3 p, in vec3 n, in float k ){
+	float scale =1.2;
+    vec4 x = texture( s, p.yz * scale );
+    vec4 y = texture( s, p.zx * scale);
+    vec4 z = texture( s, p.xy * scale);
+    vec3 w = pow( abs(n), vec3(k) );
+    return (x*w.x + y*w.y + z*w.z) / (w.x + w.y + w.z);
+}
+
+	
+	
+void fragment() {
+
+	vec4 d_t = texture(depth_tex, SCREEN_UV);
+	vec4 c_t = texture(screen_tex, SCREEN_UV);
+	
+	vec2 c_uv = (SCREEN_UV - vec2(0.5))  ;
+	ivec2 vp_size = textureSize(screen_tex, 0);
+	float ratio = float(vp_size.y)/float(vp_size.x);
+	c_uv.y *=  -ratio;
+
+	mat4 cam_mat = INV_VIEW_MATRIX;
+	
+	vec3 ro = cam_mat[3].xyz ;
+	vec3 rd = ( cam_mat *normalize(vec4(vec3(c_uv, -PROJECTION_MATRIX[0][0]*0.5),0.0))).xyz;   
+
+	
+	float t = 0.0;
+	float sdf_depth = 1.1;
+	vec3 nor = vec3(0.0);
+
+	vec4 tex_col = vec4(0.0);
+	
+//    ---  Raymarching   ---
+
+	for(int i = 0; i < 1000; i++){
+		vec3 p = ro + rd * t ;   
+		float d = map(p);
+		t += d ;
+		if (d < 0.001) {
+			
+			vec4 view_p = (VIEW_MATRIX * vec4(p, 1.0));
+			vec4 clip_p = (PROJECTION_MATRIX * view_p);
+			float zc = clip_p.z;
+			float wc = clip_p.w;
+			sdf_depth = zc / wc  ;
+
+			nor = calcNormal(p);
+			tex_col = boxmap(objects_texture_1, p, nor,0.5);
+			break;
+		}
+	if(t > 2000.0) break;
+	}
+	
+	vec3 final_col = -dot(nor, sun_vector) * tex_col.rgb *vec3(1.0,0.6,0.2) + 0.5 * (tex_col.rgb- vec3(0.2,0.1,0.0));
+
+	if(d_t.r <sdf_depth){
+		final_col = c_t.rgb;
+	}
+		
+	ALBEDO = final_col ;
+
+}"
